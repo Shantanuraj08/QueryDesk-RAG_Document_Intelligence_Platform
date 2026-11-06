@@ -88,7 +88,7 @@ export function ChatSidebar({
                 QueryDesk
               </div>
               <div className="text-[11px] text-gray-400 font-normal leading-tight mt-0.5">
-                AI Support Assistant
+                Document Intelligence
               </div>
             </div>
           </div>

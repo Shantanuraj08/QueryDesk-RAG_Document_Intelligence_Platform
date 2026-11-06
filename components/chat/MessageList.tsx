@@ -90,8 +90,12 @@ export function MessageList({
             className="w-6 h-6 object-contain"
           />
         </div>
-        <h3 className="text-base font-semibold text-gray-800">How can I help you?</h3>
-        <p className="text-xs text-gray-400 mt-1">Ask a question about your documents.</p>
+        <h3 className="text-base font-semibold text-gray-800">
+          Your Document Intelligence Workspace
+        </h3>
+        <p className="text-xs text-gray-400 mt-1.5 max-w-md leading-relaxed">
+          Start exploring your documents. Upload a PDF, DOCX, or TXT file and ask questions to get context-aware answers.
+        </p>
       </div>
     );
   }

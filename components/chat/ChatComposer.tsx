@@ -72,7 +72,7 @@ export function ChatComposer({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask a question about your documents..."
+            placeholder="Ask anything about your uploaded documents..."
             disabled={disabled || effectiveLoading}
             className="w-full bg-transparent border-0 outline-none resize-none text-xs sm:text-sm text-gray-800 placeholder-gray-400 min-h-[44px] max-h-36 pr-10 leading-relaxed block"
           />

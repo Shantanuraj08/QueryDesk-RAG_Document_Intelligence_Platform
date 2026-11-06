@@ -85,7 +85,7 @@ export function FileUploadSection({
       >
         <div className="flex items-center gap-1.5">
           <Folder size={13} className="text-gray-500" />
-          <span>Knowledge files</span>
+          <span>Knowledge documents</span>
         </div>
         {isSectionOpen ? (
           <ChevronDown size={13} className="text-gray-400" />
@@ -131,13 +131,13 @@ export function FileUploadSection({
             </div>
 
             <p className="text-xs font-semibold text-gray-800">
-              {isUploading ? "Uploading..." : "Upload files"}
+              {isUploading ? "Uploading..." : "Upload knowledge documents"}
             </p>
             <p className="text-[11px] text-gray-400 mt-0.5">
               Click or drag and drop
             </p>
             <p className="text-[10px] text-gray-400 mt-1 uppercase font-medium tracking-wide">
-              PDF, TXT, DOCX
+              PDF, DOCX, TXT
             </p>
           </div>
 
@@ -150,7 +150,7 @@ export function FileUploadSection({
           {/* Uploaded Files Section */}
           <div className="mt-4">
             <h4 className="text-[10px] font-semibold text-gray-400 tracking-wider uppercase mb-1.5 px-0.5">
-              UPLOADED FILES
+              UPLOADED DOCUMENTS
             </h4>
 
             {documents.length === 0 ? (

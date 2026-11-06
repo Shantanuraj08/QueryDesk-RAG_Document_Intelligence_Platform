@@ -110,7 +110,7 @@ export default function SignupPage() {
             QueryDesk
           </span>
           <span className="text-[11px] text-gray-500 mt-1 leading-none">
-            AI-Powered Customer Support Assistant
+            RAG-Powered Document Intelligence Platform
           </span>
         </div>
       </div>
