@@ -4,8 +4,17 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/app/generated/prisma/client";
+import {
+  checkRateLimit,
+  consumeDailyCredits,
+  refundDailyCredits,
+  DAILY_CREDIT_LIMIT,
+  QUESTION_CREDIT_COST,
+} from "@/lib/rate-limiter";
 
 const PAGE_SIZE = 10;
+const MESSAGE_RATE_LIMIT = 20;
+const MESSAGE_RATE_WINDOW_SECONDS = 60;
 
 export async function GET(
   request: Request,
@@ -144,6 +153,7 @@ export async function POST(
 ) {
   let pendingTurnId: string | undefined;
   let answerSaved = false;
+  let chargedUserId: string | undefined;
 
   try {
     // 1. Authenticate the user
@@ -155,6 +165,29 @@ export async function POST(
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 401 }
+      );
+    }
+
+    // 1b. Enforce per-user velocity rate limit (20 messages / 60s sliding window)
+    const rateLimit = await checkRateLimit(
+      `rate:msg:${session.user.id}`,
+      MESSAGE_RATE_LIMIT,
+      MESSAGE_RATE_WINDOW_SECONDS
+    );
+
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: "Too many questions. Please slow down and try again shortly." },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(
+              Math.max(1, rateLimit.retryAfter || MESSAGE_RATE_WINDOW_SECONDS)
+            ),
+            "X-RateLimit-Limit": String(rateLimit.limit),
+            "X-RateLimit-Remaining": "0",
+          },
+        }
       );
     }
 
@@ -202,6 +235,31 @@ export async function POST(
         { status: 400 }
       );
     }
+
+    // 4b. Deduct daily question credit (1 credit per question out of 30/day)
+    const credits = await consumeDailyCredits(
+      session.user.id,
+      QUESTION_CREDIT_COST,
+      DAILY_CREDIT_LIMIT
+    );
+
+    if (!credits.allowed) {
+      return NextResponse.json(
+        {
+          error: `Daily credit limit reached (${DAILY_CREDIT_LIMIT}/${DAILY_CREDIT_LIMIT} used). Allowance resets at midnight UTC.`,
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(credits.resetSeconds),
+            "X-Credits-Limit": String(credits.limit),
+            "X-Credits-Remaining": "0",
+          },
+        }
+      );
+    }
+
+    chargedUserId = session.user.id;
 
     // 5. Create a pending Turn in PostgreSQL
     const pendingTurn = await prisma.turn.create({
@@ -261,6 +319,17 @@ export async function POST(
     const answer = ragData.answer;
     const citations = ragData.sources;
 
+    // 7b. Free cache hit: refund credit when answered from Redis query cache
+    let remainingCredits = credits.remaining;
+    if (ragData.cached === true && chargedUserId) {
+      await refundDailyCredits(chargedUserId, QUESTION_CREDIT_COST);
+      chargedUserId = undefined;
+      remainingCredits = Math.min(
+        credits.limit,
+        credits.remaining + QUESTION_CREDIT_COST
+      );
+    }
+
     // 8. Save the answer and sources to the existing Turn
     const savedTurn = await prisma.turn.update({
       where: { id: pendingTurnId },
@@ -318,13 +387,27 @@ export async function POST(
         message: savedTurn,
         ...(updatedTitle && { chatTitle: updatedTitle }),
       },
-      { status: 201 }
+      {
+        status: 201,
+        headers: {
+          "X-Credits-Limit": String(credits.limit),
+          "X-Credits-Remaining": String(remainingCredits),
+        },
+      }
     );
   } catch (error) {
     console.error(
       "POST /api/chats/[chatId]/messages:",
       error
     );
+
+    let refundedRemaining: number | null = null;
+    if (!answerSaved && chargedUserId) {
+      refundedRemaining = await refundDailyCredits(
+        chargedUserId,
+        QUESTION_CREDIT_COST
+      );
+    }
 
     // Delete only an incomplete Turn.
     // Never delete an answer that has already been saved.
@@ -341,6 +424,14 @@ export async function POST(
       }
     }
 
+    const creditHeaders =
+      refundedRemaining !== null
+        ? {
+            "X-Credits-Limit": String(DAILY_CREDIT_LIMIT),
+            "X-Credits-Remaining": String(refundedRemaining),
+          }
+        : undefined;
+
     if (
       error instanceof Error &&
       error.name === "TimeoutError"
@@ -350,7 +441,7 @@ export async function POST(
           error:
             "The AI service timed out. Please try again.",
         },
-        { status: 504 }
+        { status: 504, ...(creditHeaders && { headers: creditHeaders }) }
       );
     }
 
@@ -363,7 +454,7 @@ export async function POST(
           error:
             "The AI service could not process your question.",
         },
-        { status: 502 }
+        { status: 502, ...(creditHeaders && { headers: creditHeaders }) }
       );
     }
 
@@ -373,13 +464,13 @@ export async function POST(
     ) {
       return NextResponse.json(
         { error: "The AI service is not configured." },
-        { status: 500 }
+        { status: 500, ...(creditHeaders && { headers: creditHeaders }) }
       );
     }
 
     return NextResponse.json(
       { error: "Failed to process your message" },
-      { status: 500 }
+      { status: 500, ...(creditHeaders && { headers: creditHeaders }) }
     );
   }
 }

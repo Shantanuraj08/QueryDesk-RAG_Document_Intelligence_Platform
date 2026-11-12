@@ -22,6 +22,8 @@ interface ChatSidebarProps {
   onUploadDocument: (file: File) => Promise<void>;
   onDeleteDocument: (docId: string) => Promise<void>;
   isUploading?: boolean;
+  remainingCredits?: number | null;
+  creditLimit?: number;
 }
 
 export function ChatSidebar({
@@ -37,6 +39,8 @@ export function ChatSidebar({
   onUploadDocument,
   onDeleteDocument,
   isUploading = false,
+  remainingCredits = null,
+  creditLimit = 30,
 }: ChatSidebarProps) {
   const router = useRouter();
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
@@ -135,6 +139,42 @@ export function ChatSidebar({
             onDeleteChat={onDeleteChat}
           />
         </div>
+
+        {/* Daily Credits Badge */}
+        {remainingCredits !== null && (
+          <div className="px-3 py-2 border-t border-gray-200/60 bg-white/40">
+            <div className="flex items-center justify-between text-[11px] font-medium mb-1">
+              <span
+                className={
+                  remainingCredits === 0
+                    ? "text-red-600"
+                    : remainingCredits <= 6
+                    ? "text-amber-700"
+                    : "text-gray-600"
+                }
+              >
+                ⚡ {remainingCredits} / {creditLimit} daily credits
+              </span>
+            </div>
+            <div className="w-full h-1 bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className={`h-full transition-all duration-300 ${
+                  remainingCredits === 0
+                    ? "bg-red-500"
+                    : remainingCredits <= 6
+                    ? "bg-amber-500"
+                    : "bg-gray-700"
+                }`}
+                style={{
+                  width: `${Math.min(
+                    100,
+                    Math.max(0, (remainingCredits / Math.max(1, creditLimit)) * 100)
+                  )}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* User Account / Footer */}
         <div className="p-3 border-t border-gray-200/80 bg-white/60">

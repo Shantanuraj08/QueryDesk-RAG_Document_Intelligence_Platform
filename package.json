@@ -15,6 +15,7 @@
     "@prisma/client": "^7.10.1",
     "better-auth": "^1.7.12",
     "dotenv": "^18.0.9",
+    "ioredis": "^6.0.0",
     "lucide-react": "^1.61.0",
     "next": "16.4.2",
     "pg": "^8.23.1",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
+    "@types/ioredis": "^4.28.10",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

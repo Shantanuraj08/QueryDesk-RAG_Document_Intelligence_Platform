@@ -20,6 +20,7 @@ if not QDRANT_URL or not QDRANT_API_KEY:
 client = QdrantClient(
     url=QDRANT_URL,
     api_key=QDRANT_API_KEY,
+    check_compatibility=False,
 )
 
 

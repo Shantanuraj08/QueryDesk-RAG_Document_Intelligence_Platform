@@ -21,23 +21,56 @@ export function ChatUI({ user }: ChatUIProps) {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
+  const [remainingCredits, setRemainingCredits] = useState<number | null>(null);
+  const [creditLimit, setCreditLimit] = useState<number>(30);
 
   const activeChatIdRef = useRef<string | null>(activeChatId);
   const pendingUploadsRef = useRef<Map<string, DocumentItem[]>>(new Map());
   const loadingOlderRef = useRef(false);
+  const pollTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+
+  const syncCreditsFromResponse = useCallback((res: Response) => {
+    const remainingHeader = res.headers.get("X-Credits-Remaining");
+    const limitHeader = res.headers.get("X-Credits-Limit");
+    if (limitHeader !== null) {
+      const parsedLimit = Number(limitHeader);
+      if (!Number.isNaN(parsedLimit) && parsedLimit > 0) {
+        setCreditLimit(parsedLimit);
+      }
+    }
+    if (remainingHeader !== null) {
+      const parsedRemaining = Number(remainingHeader);
+      if (!Number.isNaN(parsedRemaining)) {
+        setRemainingCredits(Math.max(0, parsedRemaining));
+      }
+    }
+  }, []);
 
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
   }, [activeChatId]);
 
-  // 1. Load user chats on mount
+  // Component cleanup and chat switch guardrail: clear polling timers
+  useEffect(() => {
+    const activeTimers = pollTimersRef.current;
+    return () => {
+      activeTimers.forEach((timer) => clearInterval(timer));
+      activeTimers.clear();
+    };
+  }, [activeChatId]);
+
+  // 1. Load user chats and initial credit balance on mount
   useEffect(() => {
     let isMounted = true;
-    async function loadChats() {
+    async function loadInitialData() {
       try {
-        const res = await fetch("/api/chats");
-        if (res.ok) {
-          const data = await res.json();
+        const [chatsRes, creditsRes] = await Promise.all([
+          fetch("/api/chats"),
+          fetch("/api/credits", { cache: "no-store" }),
+        ]);
+
+        if (chatsRes.ok) {
+          const data = await chatsRes.json();
           if (isMounted && data.chats) {
             setChats(data.chats);
             if (data.chats.length > 0) {
@@ -46,12 +79,22 @@ export function ChatUI({ user }: ChatUIProps) {
             }
           }
         }
+
+        if (creditsRes.ok) {
+          const creditsData = await creditsRes.json();
+          if (isMounted && typeof creditsData.remaining === "number") {
+            setRemainingCredits(creditsData.remaining);
+            if (typeof creditsData.limit === "number") {
+              setCreditLimit(creditsData.limit);
+            }
+          }
+        }
       } catch (err) {
-        console.error("Failed to load chats:", err);
+        console.error("Failed to load initial chat data:", err);
       }
     }
 
-    loadChats();
+    loadInitialData();
     return () => {
       isMounted = false;
     };
@@ -162,6 +205,8 @@ export function ChatUI({ user }: ChatUIProps) {
           setChats((prev) => {
             const nextChats = prev.filter((c) => c.id !== chatId);
             if (activeChatId === chatId) {
+              pollTimersRef.current.forEach((timer) => clearInterval(timer));
+              pollTimersRef.current.clear();
               const nextActive = nextChats.length > 0 ? nextChats[0].id : null;
               setActiveChatId(nextActive);
               activeChatIdRef.current = nextActive;
@@ -185,6 +230,121 @@ export function ChatUI({ user }: ChatUIProps) {
       }
     },
     [activeChatId]
+  );
+
+  // Polling Manager with Triple Guardrails:
+  // 1. Auto-Termination on terminal state ('READY' | 'FAILED')
+  // 2. Safety Circuit Breaker: Automatically time out and fail after 120 seconds
+  // 3. Component & Chat-Switch Cleanup: Interval timers tracked in pollTimersRef
+  const startDocumentStatusPolling = useCallback(
+    (chatId: string, documentId: string, taskId: string) => {
+      const startTime = Date.now();
+      const MAX_POLL_DURATION = 120_000; // 120s circuit breaker
+      const INTERVAL = 2_000; // 2s polling interval
+
+      // Clean up any existing timer for this document
+      if (pollTimersRef.current.has(documentId)) {
+        clearInterval(pollTimersRef.current.get(documentId)!);
+        pollTimersRef.current.delete(documentId);
+      }
+
+      const timerId = setInterval(async () => {
+        // Guardrail 1: Safety Circuit Breaker (120s)
+        if (Date.now() - startTime > MAX_POLL_DURATION) {
+          clearInterval(timerId);
+          pollTimersRef.current.delete(documentId);
+
+          const timeoutMsg = "Document processing timed out after 120 seconds.";
+
+          // Update pending uploads map
+          const pending = pendingUploadsRef.current.get(chatId) || [];
+          pendingUploadsRef.current.set(
+            chatId,
+            pending.map((d) =>
+              d.id === documentId
+                ? { ...d, status: "FAILED", errorMessage: timeoutMsg }
+                : d
+            )
+          );
+
+          if (activeChatIdRef.current === chatId) {
+            setDocuments((prev) =>
+              prev.map((doc) =>
+                doc.id === documentId
+                  ? { ...doc, status: "FAILED", errorMessage: timeoutMsg }
+                  : doc
+              )
+            );
+          }
+          return;
+        }
+
+        try {
+          const res = await fetch(
+            `/api/chats/${chatId}/documents/${documentId}/status?taskId=${encodeURIComponent(taskId)}`,
+            { cache: "no-store" }
+          );
+
+          syncCreditsFromResponse(res);
+
+          if (!res.ok) return;
+
+          const data = await res.json();
+          const currentStatus: DocumentItem["status"] = data.status;
+
+          // Guardrail 2: Auto-Termination on Terminal State (READY or FAILED)
+          if (currentStatus === "READY" || currentStatus === "FAILED") {
+            clearInterval(timerId);
+            pollTimersRef.current.delete(documentId);
+
+            if (currentStatus === "READY") {
+              const pending = pendingUploadsRef.current.get(chatId) || [];
+              const updated = pending.filter((d) => d.id !== documentId);
+              if (updated.length > 0) {
+                pendingUploadsRef.current.set(chatId, updated);
+              } else {
+                pendingUploadsRef.current.delete(chatId);
+              }
+            } else {
+              const pending = pendingUploadsRef.current.get(chatId) || [];
+              pendingUploadsRef.current.set(
+                chatId,
+                pending.map((d) =>
+                  d.id === documentId
+                    ? {
+                        ...d,
+                        status: "FAILED",
+                        errorMessage: data.error || "Document processing failed",
+                      }
+                    : d
+                )
+              );
+            }
+          }
+
+          // Update Document State in React UI if still on this chat
+          if (activeChatIdRef.current === chatId) {
+            setDocuments((prev) =>
+              prev.map((doc) => {
+                if (doc.id === documentId) {
+                  return {
+                    ...doc,
+                    status: currentStatus,
+                    errorMessage: data.error || undefined,
+                  };
+                }
+                return doc;
+              })
+            );
+          }
+        } catch (err) {
+          console.error("Status polling transient error:", err);
+        }
+      }, INTERVAL);
+
+      pollTimersRef.current.set(documentId, timerId);
+    },
+    [syncCreditsFromResponse]
   );
 
   // Handler for Uploading Document
@@ -226,6 +386,8 @@ export function ChatUI({ user }: ChatUIProps) {
           body: formData,
         });
 
+        syncCreditsFromResponse(res);
+
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
           throw new Error(errData.error || "Failed to upload document");
@@ -233,10 +395,17 @@ export function ChatUI({ user }: ChatUIProps) {
 
         const data = await res.json();
         if (data.document) {
-          // Remove tempDoc from pending map
+          const realDoc: DocumentItem = {
+            ...data.document,
+            size: tempDoc.size,
+          };
+
+          // Remove tempDoc from pending map and replace with realDoc if not READY yet
           const pending = pendingUploadsRef.current.get(chatId) || [];
           const updated = pending.filter((d) => d.id !== tempId);
-          if (updated.length > 0) {
+          if (realDoc.status !== "READY" && realDoc.status !== "FAILED") {
+            pendingUploadsRef.current.set(chatId, [realDoc, ...updated]);
+          } else if (updated.length > 0) {
             pendingUploadsRef.current.set(chatId, updated);
           } else {
             pendingUploadsRef.current.delete(chatId);
@@ -245,9 +414,14 @@ export function ChatUI({ user }: ChatUIProps) {
           // If still on the same chat, replace tempDoc with real document
           if (activeChatIdRef.current === chatId) {
             setDocuments((prev) => [
-              data.document,
+              realDoc,
               ...prev.filter((d) => d.id !== tempId),
             ]);
+          }
+
+          // Initiate polling if taskId is provided
+          if (data.taskId) {
+            startDocumentStatusPolling(chatId, realDoc.id, data.taskId);
           }
         }
       } catch (err: unknown) {
@@ -276,12 +450,18 @@ export function ChatUI({ user }: ChatUIProps) {
         setIsUploading(false);
       }
     },
-    [activeChatId, createNewChat]
+    [activeChatId, createNewChat, startDocumentStatusPolling, syncCreditsFromResponse]
   );
 
   // Handler for Deleting Document
   const handleDeleteDocument = useCallback(
     async (docId: string) => {
+      // Clear polling timer if active for this document
+      if (pollTimersRef.current.has(docId)) {
+        clearInterval(pollTimersRef.current.get(docId)!);
+        pollTimersRef.current.delete(docId);
+      }
+
       if (docId.startsWith("temp-")) {
         if (activeChatId) {
           const pending = pendingUploadsRef.current.get(activeChatId) || [];
@@ -335,6 +515,8 @@ export function ChatUI({ user }: ChatUIProps) {
           body: JSON.stringify({ question: content }),
         });
 
+        syncCreditsFromResponse(res);
+
         if (res.ok) {
           const data = await res.json();
           if (data.message) {
@@ -366,7 +548,7 @@ export function ChatUI({ user }: ChatUIProps) {
         setIsLoading(false);
       }
     },
-    [activeChatId, createNewChat]
+    [activeChatId, createNewChat, syncCreditsFromResponse]
   );
 
   // Handler for Loading Older Messages (Pagination)
@@ -424,6 +606,8 @@ export function ChatUI({ user }: ChatUIProps) {
         onUploadDocument={handleUploadDocument}
         onDeleteDocument={handleDeleteDocument}
         isUploading={isUploading}
+        remainingCredits={remainingCredits}
+        creditLimit={creditLimit}
       />
 
       <ChatWindow

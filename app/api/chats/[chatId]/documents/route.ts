@@ -3,16 +3,25 @@ import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import {
+  consumeDailyCredits,
+  refundDailyCredits,
+  DAILY_CREDIT_LIMIT,
+  DOCUMENT_UPLOAD_CREDIT_COST,
+} from "@/lib/rate-limiter";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const ALLOWED_EXTENSIONS = new Set([".pdf", ".docx", ".txt"]);
+
+const MAX_DOCUMENTS_PER_CHAT = 3;
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ chatId: string }> }
 ) {
   let documentId: string | undefined;
+  let chargedUserId: string | undefined;
 
   try {
     // 1. Authenticate the user
@@ -45,7 +54,21 @@ export async function POST(
       );
     }
 
-    // 3. Read and validate the uploaded file
+    // 3. Verify per-chat document limit
+    const existingCount = await prisma.document.count({
+      where: { chatId },
+    });
+
+    if (existingCount >= MAX_DOCUMENTS_PER_CHAT) {
+      return NextResponse.json(
+        {
+          error: `Maximum of ${MAX_DOCUMENTS_PER_CHAT} documents per chat reached. Please delete an existing document or create a new chat.`,
+        },
+        { status: 403 }
+      );
+    }
+
+    // 4. Read and validate the uploaded file
     const formData = await request.formData();
     const file = formData.get("file");
 
@@ -74,7 +97,32 @@ export async function POST(
       );
     }
 
-    // 4. Create the PostgreSQL document record
+    // 5. Deduct daily upload credits (3 credits per upload out of 30/day)
+    const credits = await consumeDailyCredits(
+      session.user.id,
+      DOCUMENT_UPLOAD_CREDIT_COST,
+      DAILY_CREDIT_LIMIT
+    );
+
+    if (!credits.allowed) {
+      return NextResponse.json(
+        {
+          error: `Insufficient daily credits (${DOCUMENT_UPLOAD_CREDIT_COST} required, ${credits.remaining} remaining). Allowance resets at midnight UTC.`,
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(credits.resetSeconds),
+            "X-Credits-Limit": String(credits.limit),
+            "X-Credits-Remaining": String(credits.remaining),
+          },
+        }
+      );
+    }
+
+    chargedUserId = session.user.id;
+
+    // 6. Create the PostgreSQL document record
     const document = await prisma.document.create({
       data: {
         chatId,
@@ -107,7 +155,7 @@ export async function POST(
       {
         method: "POST",
         body: ragFormData,
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(10_000),
       }
     );
 
@@ -119,38 +167,34 @@ export async function POST(
 
     const ragResult = await ragResponse.json();
 
-    if (
-      ragResult.status !== "success" ||
-      typeof ragResult.points_stored !== "number" ||
-      ragResult.points_stored <= 0
-    ) {
-      throw new Error("Document processing or storage failed");
+    if (!ragResult.task_id) {
+      throw new Error("No task_id returned from RAG ingestion service");
     }
-
-    // 6. Mark the document as ready
-    const updatedDocument = await prisma.document.update({
-      where: { id: document.id },
-      data: { status: "READY" },
-      select: {
-        id: true,
-        name: true,
-        status: true,
-        createdAt: true,
-      },
-    });
 
     return NextResponse.json(
       {
-        document: updatedDocument,
-        processing: {
-          chunksCreated: ragResult.chunks_created,
-          pointsStored: ragResult.points_stored,
-        },
+        document,
+        taskId: ragResult.task_id,
+        status: "ACCEPTED",
       },
-      { status: 201 }
+      {
+        status: 202,
+        headers: {
+          "X-Credits-Limit": String(credits.limit),
+          "X-Credits-Remaining": String(credits.remaining),
+        },
+      }
     );
   } catch (error) {
     console.error("Document upload error:", error);
+
+    let remainingCredits: number | null = null;
+    if (chargedUserId) {
+      remainingCredits = await refundDailyCredits(
+        chargedUserId,
+        DOCUMENT_UPLOAD_CREDIT_COST
+      );
+    }
 
     // 7. Mark the record as failed if one was created
     if (documentId) {
@@ -166,7 +210,15 @@ export async function POST(
 
     return NextResponse.json(
       { error: "Document upload or processing failed" },
-      { status: 500 }
+      {
+        status: 500,
+        ...(remainingCredits !== null && {
+          headers: {
+            "X-Credits-Limit": String(DAILY_CREDIT_LIMIT),
+            "X-Credits-Remaining": String(remainingCredits),
+          },
+        }),
+      }
     );
   }
 }

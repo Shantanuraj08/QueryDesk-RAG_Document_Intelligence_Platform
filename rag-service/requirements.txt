@@ -11,3 +11,5 @@ python-dotenv
 qdrant-client
 
 groq
+celery[redis]>=5.4.0
+redis>=5.0.0

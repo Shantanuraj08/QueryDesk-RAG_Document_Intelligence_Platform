@@ -14,6 +14,7 @@ interface FileUploadSectionProps {
 
 const ALLOWED_EXTENSIONS = [".pdf", ".docx", ".txt"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_DOCUMENTS_PER_CHAT = 3;
 
 export function FileUploadSection({
   documents,
@@ -27,9 +28,16 @@ export function FileUploadSection({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadingRef = useRef(false);
 
+  const isLimitReached = documents.length >= MAX_DOCUMENTS_PER_CHAT;
+
   const validateAndUpload = async (file: File) => {
     if (isUploading || uploadingRef.current) return;
     setErrorMessage(null);
+
+    if (isLimitReached) {
+      setErrorMessage(`Maximum of ${MAX_DOCUMENTS_PER_CHAT} documents per chat reached.`);
+      return;
+    }
 
     const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
@@ -68,7 +76,7 @@ export function FileUploadSection({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (isUploading || uploadingRef.current) return;
+    if (isUploading || uploadingRef.current || isLimitReached) return;
     const file = e.dataTransfer.files?.[0];
     if (file) {
       validateAndUpload(file);
@@ -86,6 +94,9 @@ export function FileUploadSection({
         <div className="flex items-center gap-1.5">
           <Folder size={13} className="text-gray-500" />
           <span>Knowledge documents</span>
+          <span className="text-[10px] text-gray-400 font-normal">
+            ({documents.length}/{MAX_DOCUMENTS_PER_CHAT})
+          </span>
         </div>
         {isSectionOpen ? (
           <ChevronDown size={13} className="text-gray-400" />
@@ -99,26 +110,30 @@ export function FileUploadSection({
           {/* Dropzone Card */}
           <div
             onClick={() => {
-              if (!isUploading && !uploadingRef.current) {
+              if (!isUploading && !uploadingRef.current && !isLimitReached) {
                 fileInputRef.current?.click();
               }
             }}
             onDragOver={(e) => {
               e.preventDefault();
-              setIsDragging(true);
+              if (!isLimitReached) setIsDragging(true);
             }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
-            className={`border rounded-xl p-3.5 text-center cursor-pointer transition-colors shadow-2xs ${isDragging
-                ? "border-gray-400 bg-gray-50/80"
-                : "border-gray-200 bg-white hover:border-gray-300"
-              }`}
+            className={`border rounded-xl p-3.5 text-center transition-colors shadow-2xs ${
+              isLimitReached
+                ? "border-gray-200 bg-gray-50/60 cursor-not-allowed opacity-80"
+                : isDragging
+                ? "border-gray-400 bg-gray-50/80 cursor-pointer"
+                : "border-gray-200 bg-white hover:border-gray-300 cursor-pointer"
+            }`}
           >
             <input
               ref={fileInputRef}
               type="file"
               accept=".pdf,.docx,.txt"
               onChange={handleFileChange}
+              disabled={isLimitReached}
               className="hidden"
             />
 
@@ -126,19 +141,27 @@ export function FileUploadSection({
               {isUploading ? (
                 <Loader2 size={14} className="animate-spin text-gray-500" />
               ) : (
-                <Upload size={14} />
+                <Upload size={14} className={isLimitReached ? "text-gray-400" : ""} />
               )}
             </div>
 
             <p className="text-xs font-semibold text-gray-800">
-              {isUploading ? "Uploading..." : "Upload knowledge documents"}
+              {isUploading
+                ? "Uploading..."
+                : isLimitReached
+                ? `Chat limit reached (${MAX_DOCUMENTS_PER_CHAT}/${MAX_DOCUMENTS_PER_CHAT})`
+                : "Upload knowledge documents"}
             </p>
             <p className="text-[11px] text-gray-400 mt-0.5">
-              Click or drag and drop
+              {isLimitReached
+                ? "Delete a document to add another"
+                : "Click or drag and drop"}
             </p>
-            <p className="text-[10px] text-gray-400 mt-1 uppercase font-medium tracking-wide">
-              PDF, DOCX, TXT
-            </p>
+            {!isLimitReached && (
+              <p className="text-[10px] text-gray-400 mt-1 uppercase font-medium tracking-wide">
+                PDF, DOCX, TXT
+              </p>
+            )}
           </div>
 
           {errorMessage && (
