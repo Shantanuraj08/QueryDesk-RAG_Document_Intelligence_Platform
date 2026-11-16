@@ -21,6 +21,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Generate Prisma Client to ./app/generated/prisma before Next.js build
+RUN npx prisma generate
+
 # Disable Next.js telemetry during build
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -47,6 +50,7 @@ RUN mkdir .next && chown nextjs:nodejs .next
 # Copy standalone output and static bundle
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/app/generated/prisma ./app/generated/prisma
 
 USER nextjs
 
