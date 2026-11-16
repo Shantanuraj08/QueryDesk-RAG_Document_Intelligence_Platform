@@ -2,7 +2,7 @@ services:
 
   # FastAPI RAG Service & Celery Background Worker
   rag-service:
-    image: ${RAG_IMAGE:-ghcr.io/shantanuraj08/querydesk-rag-customer-support-assistant/rag-service:latest}
+    image: ${RAG_IMAGE:-ghcr.io/shantanuraj08/querydesk-rag_document_intelligence_platform/rag-service:latest}
     build:
       context: ./rag-service
       dockerfile: Dockerfile
@@ -24,7 +24,7 @@ services:
 
   # Next.js 16 Frontend & BFF
   web:
-    image: ${WEB_IMAGE:-ghcr.io/shantanuraj08/querydesk-rag-customer-support-assistant/web:latest}
+    image: ${WEB_IMAGE:-ghcr.io/shantanuraj08/querydesk-rag_document_intelligence_platform/web:latest}
     build:
       context: .
       dockerfile: Dockerfile
