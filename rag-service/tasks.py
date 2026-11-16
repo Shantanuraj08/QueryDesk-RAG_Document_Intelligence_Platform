@@ -16,6 +16,11 @@ from services.text_splitter import split_documents
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+# If using rediss:// (e.g. Upstash TLS Redis), Celery mandates ssl_cert_reqs parameter
+if REDIS_URL.startswith("rediss://") and "ssl_cert_reqs" not in REDIS_URL:
+    separator = "&" if "?" in REDIS_URL else "?"
+    REDIS_URL = f"{REDIS_URL}{separator}ssl_cert_reqs=required"
+
 celery_app = Celery(
     "querydesk_tasks",
     broker=REDIS_URL,

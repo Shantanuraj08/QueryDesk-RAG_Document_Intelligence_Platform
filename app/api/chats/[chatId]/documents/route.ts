@@ -54,9 +54,12 @@ export async function POST(
       );
     }
 
-    // 3. Verify per-chat document limit
+    // 3. Verify per-chat document limit (exclude failed uploads from cap)
     const existingCount = await prisma.document.count({
-      where: { chatId },
+      where: {
+        chatId,
+        status: { not: "FAILED" },
+      },
     });
 
     if (existingCount >= MAX_DOCUMENTS_PER_CHAT) {

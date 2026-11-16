@@ -88,7 +88,11 @@ export function UploadedFileItem({ document, onDelete }: UploadedFileItemProps) 
             onClick={handleDelete}
             disabled={isDeleting}
             aria-label={document.status === "FAILED" ? `Remove ${document.name}` : `Delete ${document.name}`}
-            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 transition-opacity p-0.5 focus:opacity-100 focus:outline-none"
+            className={`${
+              document.status === "FAILED"
+                ? "opacity-100 text-red-500 hover:text-red-700"
+                : "opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600"
+            } transition-opacity p-0.5 focus:opacity-100 focus:outline-none`}
             title={document.status === "FAILED" ? "Remove failed entry" : "Delete document"}
           >
             {isDeleting ? (

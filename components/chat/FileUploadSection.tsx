@@ -28,7 +28,8 @@ export function FileUploadSection({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadingRef = useRef(false);
 
-  const isLimitReached = documents.length >= MAX_DOCUMENTS_PER_CHAT;
+  const activeDocuments = documents.filter((doc) => doc.status !== "FAILED");
+  const isLimitReached = activeDocuments.length >= MAX_DOCUMENTS_PER_CHAT;
 
   const validateAndUpload = async (file: File) => {
     if (isUploading || uploadingRef.current) return;
@@ -95,7 +96,7 @@ export function FileUploadSection({
           <Folder size={13} className="text-gray-500" />
           <span>Knowledge documents</span>
           <span className="text-[10px] text-gray-400 font-normal">
-            ({documents.length}/{MAX_DOCUMENTS_PER_CHAT})
+            ({activeDocuments.length}/{MAX_DOCUMENTS_PER_CHAT})
           </span>
         </div>
         {isSectionOpen ? (
