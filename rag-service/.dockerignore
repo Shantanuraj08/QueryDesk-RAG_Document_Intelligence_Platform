@@ -1,0 +1,25 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environment and bytecode
+.venv
+venv
+ENV
+env
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# OS and Git metadata
+.git
+.gitignore
+.DS_Store
+
+# Test artifacts and logs
+*.log
+sample.pdf
+verify_all.py

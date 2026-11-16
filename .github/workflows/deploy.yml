@@ -1,0 +1,162 @@
+name: Production CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # =========================================================================
+  # 1. TEST & QUALITY GATE
+  # =========================================================================
+  test:
+    name: Lint & Automated Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      - name: Run TypeScript Type Check
+        run: npx tsc --noEmit
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: 'rag-service/requirements.txt'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r rag-service/requirements.txt
+
+      - name: Run Backend Test Suite (FastAPI, Celery, Redis Mocks)
+        run: python rag-service/verify_all.py
+
+  # =========================================================================
+  # 2. BUILD & PUSH DOCKER IMAGES (GHCR)
+  # =========================================================================
+  build-and-push:
+    name: Build & Push Docker Images
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase Repository Name
+        run: |
+          echo "REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      # --- Build & Push RAG Service Image ---
+      - name: Build & Push RAG Service Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./rag-service
+          file: ./rag-service/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ env.REPO_LOWER }}/rag-service:latest
+            ghcr.io/${{ env.REPO_LOWER }}/rag-service:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- Build & Push Next.js Web Image ---
+      - name: Build & Push Next.js Web Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ env.REPO_LOWER }}/web:latest
+            ghcr.io/${{ env.REPO_LOWER }}/web:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =========================================================================
+  # 3. DEPLOY TO AWS EC2
+  # =========================================================================
+  deploy:
+    name: Deploy to AWS EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Lowercase Repository Name
+        run: |
+          echo "REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Copy docker-compose.yml to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: "/home/${{ secrets.EC2_USERNAME }}/support-assistant"
+
+      - name: Deploy via SSH to EC2
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          PRODUCTION_ENV: ${{ secrets.PRODUCTION_ENV }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_LOWER: ${{ env.REPO_LOWER }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: PRODUCTION_ENV,GITHUB_ACTOR,GITHUB_TOKEN,REPO_LOWER
+          script: |
+            set -e
+            cd /home/${{ secrets.EC2_USERNAME }}/support-assistant
+
+            # 1. Securely write production .env file
+            echo "$PRODUCTION_ENV" > .env
+            chmod 600 .env
+
+            # 2. Log in to GitHub Container Registry on EC2
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+            # 3. Pull latest pre-built production images from GHCR
+            RAG_IMAGE="ghcr.io/${REPO_LOWER}/rag-service:latest" \
+            WEB_IMAGE="ghcr.io/${REPO_LOWER}/web:latest" \
+            docker compose pull
+
+            # 4. Start containers (instant recreation without build overhead)
+            RAG_IMAGE="ghcr.io/${REPO_LOWER}/rag-service:latest" \
+            WEB_IMAGE="ghcr.io/${REPO_LOWER}/web:latest" \
+            docker compose up -d --remove-orphans
+
+            # 5. Clean up dangling images to preserve EC2 disk space
+            docker image prune -f

@@ -1,0 +1,47 @@
+services:
+
+  # FastAPI RAG Service & Celery Background Worker
+  rag-service:
+    image: ${RAG_IMAGE:-ghcr.io/shantanuraj08/querydesk-rag-customer-support-assistant/rag-service:latest}
+    build:
+      context: ./rag-service
+      dockerfile: Dockerfile
+    # Security: Internal only - inaccessible from the public internet
+    expose:
+      - "8000"
+    env_file:
+      - .env
+    # Reliability: 30s health check ensures FastAPI is responsive before web routes traffic
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  # Next.js 16 Frontend & BFF
+  web:
+    image: ${WEB_IMAGE:-ghcr.io/shantanuraj08/querydesk-rag-customer-support-assistant/web:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      # Next.js is the single public gateway (proxied via Nginx in production)
+      - "3000:3000"
+    environment:
+      - RAG_SERVICE_URL=http://rag-service:8000
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+    env_file:
+      - .env
+    # Wait for RAG service health check to pass before accepting user traffic
+    depends_on:
+      rag-service:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
