@@ -48,6 +48,15 @@ jobs:
           pip install -r rag-service/requirements.txt
 
       - name: Run Backend Test Suite (FastAPI, Celery, Redis Mocks)
+        env:
+          GEMINI_API_KEY: "mock-gemini-key"
+          GEMINI_EMBEDDING_MODEL: "models/text-embedding-004"
+          GROQ_API_KEY: "mock-groq-key"
+          GROQ_GENERATION_MODEL: "llama-3.3-70b-versatile"
+          QDRANT_URL: "https://mock-cluster.qdrant.io:6333"
+          QDRANT_API_KEY: "mock-qdrant-key"
+          QDRANT_COLLECTION: "support_documents"
+          REDIS_URL: "redis://localhost:6379"
         run: python rag-service/verify_all.py
 
   # =========================================================================

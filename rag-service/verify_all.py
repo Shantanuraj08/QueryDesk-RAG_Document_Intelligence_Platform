@@ -23,6 +23,17 @@ sys.path.insert(0, str(RAG_DIR))
 from dotenv import load_dotenv
 load_dotenv(RAG_DIR / ".env")
 
+# Mock environment defaults for CI test runners (all external network calls are mocked)
+os.environ.setdefault("GEMINI_API_KEY", "mock-gemini-key-for-ci")
+os.environ.setdefault("GEMINI_EMBEDDING_MODEL", "models/text-embedding-004")
+os.environ.setdefault("GEMINI_GENERATION_MODEL", "gemini-1.5-flash")
+os.environ.setdefault("GROQ_API_KEY", "mock-groq-key-for-ci")
+os.environ.setdefault("GROQ_GENERATION_MODEL", "llama-3.3-70b-versatile")
+os.environ.setdefault("QDRANT_URL", "https://mock-cluster.qdrant.io:6333")
+os.environ.setdefault("QDRANT_API_KEY", "mock-qdrant-key-for-ci")
+os.environ.setdefault("QDRANT_COLLECTION", "support_documents")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379")
+
 from fastapi import HTTPException
 
 # Import modules to verify
